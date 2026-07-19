@@ -103,10 +103,154 @@ function createTables() {
         )
     `);
 
+    db.run(`
+        CREATE TABLE IF NOT EXISTS giveaways (
+            id TEXT PRIMARY KEY,
+            message_id TEXT,
+            channel_id TEXT,
+            guild_id TEXT,
+            title TEXT NOT NULL,
+            description TEXT,
+            winner_count INTEGER DEFAULT 1,
+            end_time INTEGER NOT NULL,
+            host_id TEXT NOT NULL,
+            ended INTEGER DEFAULT 0,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+    `);
+    
+    db.run(`
+        CREATE TABLE IF NOT EXISTS giveaway_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            giveaway_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            joined_at INTEGER DEFAULT (strftime('%s', 'now')),
+            UNIQUE(giveaway_id, user_id)
+        )
+    `);
+
     // Migration: Add missing columns to counters table
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_by TEXT`); } catch(e) {}
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_reason TEXT`); } catch(e) {}
 
+}
+
+
+
+// ===== GIVEAWAY SYSTEM =====
+
+function createGiveaway(data) {
+    db.run(`
+        INSERT INTO giveaways (id, message_id, channel_id, guild_id, title, description, winner_count, end_time, host_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+        data.id,
+        data.messageId,
+        data.channelId,
+        data.guildId,
+        data.title,
+        data.description,
+        data.winnerCount,
+        data.endTime,
+        data.hostId
+    ]);
+    save();
+}
+
+function getGiveaway(id) {
+    const result = db.exec(`SELECT * FROM giveaways WHERE id = ?`, [id]);
+    
+    if (!result || result.length === 0) return null;
+    
+    const columns = result[0].columns;
+    const row = result[0].values[0];
+    const giveaway = {};
+    columns.forEach((col, i) => { giveaway[col] = row[i]; });
+    
+    return giveaway;
+}
+
+function endGiveaway(id) {
+    db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [id]);
+    save();
+}
+
+function joinGiveaway(giveawayId, userId) {
+    // Prüfen ob Eintrag schon existiert
+    const result = db.exec(
+        `SELECT user_id FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?`,
+        [giveawayId, userId]
+    );
+    
+    if (result.length > 0 && result[0].values.length > 0) {
+        // Bereits dabei!
+        return false;
+    }
+    
+    // Neuen Eintrag erstellen
+    db.run(
+        `INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)`,
+        [giveawayId, userId]
+    );
+    
+    save();
+    return true;
+
+
+    // Erst prüfen ob schon drin
+    const existing = db.exec(
+        `SELECT 1 FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?`,
+        [giveawayId, userId]
+    );
+    if (existing.length > 0 && existing[0].values.length > 0) {
+        return false; // Bereits dabei!
+    }
+
+    db.run(
+        `INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)`,
+        [giveawayId, userId]
+    );
+    save();
+    return true;
+}
+
+function leaveGiveaway(giveawayId, userId) {
+    db.run(
+        `DELETE FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?`,
+        [giveawayId, userId]
+    );
+    save();
+}
+
+function getGiveawayEntries(giveawayId) {
+    const result = db.exec(
+        `SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) {
+        return [];
+    }
+    
+    // result[0].values ist [[user_id], [user_id], ...]
+    return result[0].values.map(row => row[0]);
+}
+
+function getActiveGiveaways() {
+    const now = Math.floor(Date.now() / 1000);
+    const result = db.exec(
+        `SELECT * FROM giveaways WHERE ended = 0 AND end_time <= ?`,
+        [now]
+    );
+    
+    if (!result || result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    return result[0].values.map(row => {
+        const giveaway = {};
+        columns.forEach((col, i) => { giveaway[col] = row[i]; });
+        return giveaway;
+    });
 }
 
 function save() {
@@ -527,4 +671,13 @@ module.exports = {
     incrementCounter,
     resetCounter,
     getAllCounters,
+
+    // Giveaways
+    createGiveaway,
+    getGiveaway,
+    endGiveaway,
+    joinGiveaway,
+    getGiveawayEntries,
+    getActiveGiveaways,
+    leaveGiveaway, 
 };

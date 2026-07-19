@@ -6,7 +6,6 @@ module.exports = (client) => {
     client.on('clientReady', async (client) => {
         console.log(`✅ Bot online als ${client.user.tag}`);
 
-        // Initialize database
         try {
             await db.init();
             console.log('✅ Database initialized');
@@ -52,8 +51,8 @@ module.exports = (client) => {
             console.error('⚠️ Command registration failed:', err.message);
         }
 
-        // ⭐ AUTO-CLOSE SCHEDULER (ersetzt while(true)) ⭐
-        const AUTO_CLOSE_INTERVAL = 60 * 60 * 1000; // 1 hour
+        // ⭐ AUTO-CLOSE SCHEDULER ⭐
+        const AUTO_CLOSE_INTERVAL = 60 * 60 * 1000;
         const autoCloseTimer = setInterval(async () => {
             try {
                 const tickets = db.getOpenTickets();
@@ -76,7 +75,6 @@ module.exports = (client) => {
                             console.error(`Failed to send warning to ${ticket.channel_id}:`, err.message);
                         }
 
-                        // Wait 24h then check again
                         setTimeout(async () => {
                             try {
                                 const freshTicket = db.getTicket(ticket.channel_id);
@@ -116,7 +114,7 @@ module.exports = (client) => {
                             } catch (err) {
                                 console.error('Auto-close secondary check failed:', err.message);
                             }
-                        }, 24 * 60 * 60 * 1000); // 24h delay
+                        }, 24 * 60 * 60 * 1000);
                     }
                 }
             } catch (err) {
@@ -124,10 +122,84 @@ module.exports = (client) => {
             }
         }, AUTO_CLOSE_INTERVAL);
 
-        // Store timer for cleanup
         client.autoCloseTimer = autoCloseTimer;
 
         console.log('✅ Auto-close scheduler started (hourly interval)');
         console.log(`🌐 Connected to guild: ${config.SERVER_ID}`);
+
+                // ⭐ GIVEAWAY SCHEDULER ⭐
+        const giveawayTimer = setInterval(async () => {
+            try {
+                const activeGiveaways = db.getActiveGiveaways();
+
+                for (const giveaway of activeGiveaways) {
+                    try {
+                        const channel = await client.channels.fetch(giveaway.channel_id).catch(() => null);
+                        if (!channel) {
+                            console.log(`⚠️ Giveaway ${giveaway.id}: Channel nicht gefunden — wird als beendet markiert`);
+                            db.endGiveaway(giveaway.id);
+                            continue;
+                        }
+
+                        const message = await channel.messages.fetch(giveaway.message_id).catch(() => null);
+                        if (!message) {
+                            console.log(`⚠️ Giveaway ${giveaway.id}: Nachricht nicht gefunden — wird als beendet markiert`);
+                            db.endGiveaway(giveaway.id);
+                            continue;
+                        }
+
+                        const entries = db.getGiveawayEntries(giveaway.id);
+
+                        let winners = [];
+                        if (entries.length > 0) {
+                            const shuffled = [...entries].sort(() => Math.random() - 0.5);
+                            const winnerCount = Math.min(giveaway.winner_count, entries.length);
+                            winners = shuffled.slice(0, winnerCount);
+                        }
+
+                        db.endGiveaway(giveaway.id);
+
+                        const winnerMentions = winners.length > 0
+                            ? winners.map(id => `<@${id}>`).join(', ')
+                            : null;
+
+                        const finalDescription =
+                            `> ${giveaway.description}\n\n` +
+                            `👥 **Gewinner:** ${giveaway.winner_count}\n` +
+                            `⏰ **Status:** Bereits Geendet ✅\n` +
+                            `🎟️ **Teilnehmer:** ${entries.length}\n` +
+                            `👑 **Host:** <@${giveaway.host_id}>\n\n` +
+                            (winners.length > 0
+                                ? `🎊 **GEWINNER:** ${winnerMentions} 🎉`
+                                : `😔 **Keine Gewinner** — keine Teilnehmer!`);
+
+                        const embed = EmbedBuilder.from(message.embeds[0])
+                            .setDescription(finalDescription)
+                            .setColor(winners.length > 0 ? 0x00ff00 : 0xff0000)
+                            .setFooter({ text: `Giveaway beendet • ID: ${giveaway.id}` });
+
+                        await message.edit({ embeds: [embed], components: [] });
+
+                        if (winners.length > 0) {
+                            await channel.send({
+                                content: `🎊 **Giveaway beendet!**\nHerzlichen Glückwunsch an ${winnerMentions}!\n🎉 **${giveaway.title}**`,
+                                allowedMentions: { users: winners }
+                            });
+                        } else {
+                            await channel.send(`😔 **Giveaway "${giveaway.title}"** wurde beendet — leider gab es keine Teilnehmer.`);
+                        }
+
+                    } catch (error) {
+                        console.error(`Fehler beim Beenden des Giveaways ${giveaway.id}:`, error.message);
+                        db.endGiveaway(giveaway.id);
+                    }
+                }
+            } catch (err) {
+                console.error('Giveaway scheduler error:', err.message);
+            }
+        }, 30_000);
+
+        client.giveawayTimer = giveawayTimer;
+        console.log('✅ Giveaway scheduler started (30s interval)');
     });
 };
