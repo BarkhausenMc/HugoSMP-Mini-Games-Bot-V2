@@ -27,12 +27,16 @@ client.selectMenus = new Collection();
 // ==========================================
 //   LOADER
 // ==========================================
+// ==========================================
+//   LOADER
+// ==========================================
 function loadHandlers() {
     const dirs = [
         { dir: path.join(__dirname, 'commands'), collection: client.commands, type: 'command' },
         { dir: path.join(__dirname, 'interactions', 'buttons'), collection: client.buttons, type: 'button' },
         { dir: path.join(__dirname, 'interactions', 'modals'), collection: client.modals, type: 'modal' },
         { dir: path.join(__dirname, 'interactions', 'selectMenus'), collection: client.selectMenus, type: 'selectMenu' },
+        { dir: path.join(__dirname, 'events'), collection: client.events, type: 'event' },  // ← COUNTER EVENT!
     ];
 
     for (const { dir, collection, type } of dirs) {
@@ -41,9 +45,22 @@ function loadHandlers() {
         for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.js'))) {
             try {
                 const handler = require(path.join(dir, file));
-                const id = file.replace('.js', '');
-                collection.set(id, handler);
-                console.log(`✅ Loaded ${file}`);
+                
+if (type === 'event') {
+    if (handler.name && typeof handler.execute === 'function') {
+        client.on(handler.name, async (...args) => {
+            const [message, client] = args;
+            await handler.execute(message, client, { client, config, db });
+        });
+        console.log(`✅ Loaded event: ${file}`);
+    }
+
+                } else {
+                    // Commands, Buttons, Modals, SelectMenus
+                    const id = file.replace('.js', '');
+                    collection.set(id, handler);
+                    console.log(`✅ Loaded ${type}: ${file}`);
+                }
             } catch (err) {
                 console.error(`❌ Failed to load ${file}:`, err.message);
             }

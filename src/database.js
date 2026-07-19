@@ -91,6 +91,40 @@ function createTables() {
             last_seen TEXT NOT NULL
         )
     `);
+
+ db.run(`
+        CREATE TABLE IF NOT EXISTS counters (
+            channel_id TEXT PRIMARY KEY,
+            number INTEGER DEFAULT 0,
+            last_user_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )
+    `);
+    
+    // Leaderboard table
+    db.run(`
+        CREATE TABLE IF NOT EXISTS counter_leaderboard (
+            user_id TEXT PRIMARY KEY,
+            total_count INTEGER DEFAULT 0,
+            streak_current INTEGER DEFAULT 0,
+            streak_best INTEGER DEFAULT 0,
+            first_number TEXT,
+            last_active TEXT
+        )
+    `);
+
+    db.run(`
+    CREATE TABLE IF NOT EXISTS counters (
+        channel_id TEXT PRIMARY KEY,
+        number INTEGER DEFAULT 0,
+        last_user_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        reset_by TEXT,     
+        reset_reason TEXT   
+    )
+`);
 }
 
 // ===== SAVE FUNCTION =====
@@ -374,6 +408,85 @@ function setLastSeen(userId, timestamp) {
     save();
 }
 
+// ===== COUNTER SYSTEM =====
+
+function getCounter(channelId) {
+    const channelIdStr = String(channelId);
+    const result = db.exec(
+        `SELECT * FROM counters WHERE channel_id = ?`,
+        [channelIdStr]
+    );
+    
+    if (!result || result.length === 0) return null;
+    
+    const columns = result[0].columns;
+    const row = result[0].values[0];
+    const counter = {};
+    columns.forEach((col, i) => {
+        counter[col] = row[i];
+    });
+    
+    return counter;
+}
+
+function initCounter(channelId, ownerId) {
+    const channelIdStr = String(channelId);
+    const ownerIdStr = String(ownerId);
+    
+    db.run(
+        `INSERT INTO counters (channel_id, number, last_user_id, created_at) 
+         VALUES (?, 0, ?, datetime('now'))`,
+        [channelIdStr, ownerIdStr]
+    );
+    
+    save();
+}
+
+function incrementCounter(channelId, userId) {
+    const channelIdStr = String(channelId);
+    const userIdStr = String(userId);
+    
+    db.run(
+        `UPDATE counters SET number = number + 1, last_user_id = ?, updated_at = datetime('now') 
+         WHERE channel_id = ?`,
+        [userIdStr, channelIdStr]
+    );
+    
+    save();
+}
+
+function resetCounter(channelId, adminId) {
+    const channelIdStr = String(channelId);
+    const adminIdStr = String(adminId);
+    
+    db.run(
+        `UPDATE counters SET number = 0, last_user_id = ?, updated_at = datetime('now') 
+         WHERE channel_id = ?`,
+        [adminIdStr, channelIdStr]
+    );
+    
+    save();
+}
+
+function getAllCounters() {
+    const result = db.exec(`SELECT * FROM counters ORDER BY number DESC LIMIT 100`);
+    
+    if (!result || result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    return result[0].values.map(row => {
+        const counter = {};
+        columns.forEach((col, i) => {
+            counter[col] = row[i];
+        });
+        counter.channel_id = String(counter.channel_id);
+        counter.last_user_id = String(counter.last_user_id);
+        return counter;
+    });
+}
+
+
+
 module.exports = {
     init,
     close,
@@ -401,4 +514,10 @@ module.exports = {
     getTicketsClaimedBy,
     getLastSeen,
     setLastSeen,
+
+    getCounter,
+    initCounter,
+    incrementCounter,
+    resetCounter,
+    getAllCounters,
 };
