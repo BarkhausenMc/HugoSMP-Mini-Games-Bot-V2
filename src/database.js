@@ -84,6 +84,13 @@ function createTables() {
             owner_id TEXT NOT NULL
         )
     `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS staff_last_seen (
+            user_id TEXT PRIMARY KEY,
+            last_seen TEXT NOT NULL
+        )
+    `);
 }
 
 // ===== SAVE FUNCTION =====
@@ -323,6 +330,50 @@ function close() {
     }
 }
 
+// ===== ASSIGNED TICKETS TRACKING =====
+
+function getTicketsClaimedBy(userId) {
+    const userIdStr = String(userId);
+    const result = db.exec(
+        `SELECT * FROM tickets WHERE claimed_by = ? AND closed = 0 ORDER BY created_at DESC`,
+        [userIdStr]
+    );
+    
+    if (!result || result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    return result[0].values.map(row => {
+        const ticket = {};
+        columns.forEach((col, i) => {
+            ticket[col] = row[i];
+        });
+        ticket.channel_id = String(ticket.channel_id);
+        ticket.owner_id = String(ticket.owner_id);
+        ticket.claimed_by = ticket.claimed_by ? String(ticket.claimed_by) : null;
+        return ticket;
+    });
+}
+
+function getLastSeen(userId) {
+    const userIdStr = String(userId);
+    const result = db.exec(
+        `SELECT last_seen FROM staff_last_seen WHERE user_id = ?`,
+        [userIdStr]
+    );
+    
+    if (!result || result.length === 0) return null;
+    return result[0].values[0][0];
+}
+
+function setLastSeen(userId, timestamp) {
+    const userIdStr = String(userId);
+    db.run(
+        `INSERT OR REPLACE INTO staff_last_seen (user_id, last_seen) VALUES (?, ?)`,
+        [userIdStr, timestamp]
+    );
+    save();
+}
+
 module.exports = {
     init,
     close,
@@ -346,4 +397,8 @@ module.exports = {
     
     // Migration
     migrateFromJSON,
+
+    getTicketsClaimedBy,
+    getLastSeen,
+    setLastSeen,
 };

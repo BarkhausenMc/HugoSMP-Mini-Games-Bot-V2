@@ -29,8 +29,18 @@ function buildTicketActionRow() {
 
 module.exports = {
     execute: async (interaction, { client, config, db }) => {
+        console.log('🔴 [MODAL] Modal submitted:', interaction.customId);
+        
         try {
             const categoryKey = interaction.customId.replace('ticket_modal_', '');
+            
+            // ⭐ KEIN deferUpdate() VORHER! ⭐
+            
+            if (!config.TICKET_CATEGORIES[categoryKey]) {
+                console.error('❌ [MODAL] Invalid category:', categoryKey);
+                return;
+            }
+            
             const cat = config.TICKET_CATEGORIES[categoryKey];
             const userId = String(interaction.user.id);
 
@@ -49,6 +59,7 @@ module.exports = {
             // Find or create category
             let category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === config.TICKET_CATEGORY_NAME);
             if (!category) {
+                console.log('📁 [MODAL] Creating new category:', config.TICKET_CATEGORY_NAME);
                 category = await guild.channels.create({ name: config.TICKET_CATEGORY_NAME, type: ChannelType.GuildCategory });
             }
 
@@ -71,6 +82,7 @@ module.exports = {
             }
 
             // Create channel
+            console.log('📝 [MODAL] Creating ticket channel:', channelName);
             const ticketChannel = await guild.channels.create({
                 name: channelName,
                 type: ChannelType.GuildText,
@@ -78,6 +90,7 @@ module.exports = {
                 permissionOverwrites: overwrites,
                 topic: `Ticket | ${categoryKey} | Owner: ${username} | Claim: None`,
             });
+            console.log('✅ [MODAL] Channel created:', ticketChannel.id);
 
             // Special perms for Bug Report
             if (categoryKey === 'Bug Report' && config.OWNER_ROLE_ID) {
@@ -117,16 +130,21 @@ module.exports = {
             embed.setFooter({ text: 'HugoSMP Mini-Games | Klicke unten um zu schließen 🔒' });
 
             // ⭐ SENDING EMBED + BUTTONS ⭐
+            console.log('📤 [MODAL] Sending initial message with embed and buttons...');
             const msg = await ticketChannel.send({ embeds: [embed], components: [buildTicketActionRow()] });
+            console.log('✅ [MODAL] Initial message sent:', msg.id);
 
-            // ⭐ PING NUR JE NACH KATEGORIE ⭐
+            // PING
+            console.log('📢 [MODAL] Sending ping message...');
             if (categoryKey === 'Bug Report') {
                 await ticketChannel.send(`${interaction.user} Dein Ticket ist offen! <@&${config.OWNER_ROLE_ID}>`);
             } else {
                 await ticketChannel.send(`${interaction.user} Dein Ticket ist offen! Ein Teammitglied meldet sich bald. ✅ <@&${config.STAFF_ROLE_ID}>`);
             }
+            console.log('✅ [MODAL] Ping message sent');
 
             // Save to DB
+            console.log('💾 [MODAL] Saving ticket to database...');
             db.createTicket({
                 channelId: ticketChannel.id,
                 ownerId: userId,
@@ -143,13 +161,25 @@ module.exports = {
                 lockedAt: null,
                 messageId: msg.id,
             });
+            console.log('✅ [MODAL] Ticket saved to DB');
 
-            await interaction.reply({ content: `✅ Ticket erstellt: ${ticketChannel.toString()}`, flags: MessageFlags.Ephemeral });
+            // ⭐ ANTWORT AN DEN BENUTZER (ephemeral) ⭐
+            console.log('💬 [MODAL] Replying to user...');
+            await interaction.reply({ 
+                content: `✅ Ticket erstellt: ${ticketChannel.toString()}`, 
+                flags: MessageFlags.Ephemeral 
+            });
+            console.log('✅ [MODAL] User replied');
         } catch (error) {
-            console.error('Ticket Creation Error:', error.message);
-            console.error(error.stack); // ⭐ DEBUG STACK TRACE! ⭐
-            await interaction.reply({ content: '❌ Fehler beim Erstellen des Tickets! Siehe Console für Details.', flags: MessageFlags.Ephemeral });
+            console.error('❌ [MODAL] Ticket Creation Error:', error.message);
+            console.error(error.stack);
+            // ⭐ EDIT REPLY OHNE DEFER FUNKTIONIERT NICHT! ⭐
+            // Versuchen direkt zu antworten:
+            try {
+                await interaction.reply({ content: '❌ Fehler beim Erstellen des Tickets!', flags: MessageFlags.Ephemeral });
+            } catch (e) {
+                console.error('Failed to reply to user:', e.message);
+            }
         }
     },
 };
-
