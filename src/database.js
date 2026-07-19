@@ -6,24 +6,18 @@ const config = require('./config');
 let db = null;
 let dbPath = null;
 
-/**
- * Initialize database connection
- */
 async function init() {
     if (db) return db;
     
     dbPath = path.resolve(config.DATABASE_PATH);
     
-    // Ensure directory exists
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
     
-    // Initialize SQL.js
     const SQL = await initSqlJs();
     
-    // Load existing DB or create new one
     if (fs.existsSync(dbPath)) {
         const buffer = fs.readFileSync(dbPath);
         db = new SQL.Database(buffer);
@@ -33,20 +27,14 @@ async function init() {
         console.log('🆕 New database created');
     }
     
-    // Create tables
     createTables();
-    
-    // Save initial state
     save();
     
     return db;
 }
 
-/**
- * Create database schema
- */
 function createTables() {
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS tickets (
             channel_id TEXT PRIMARY KEY,
             owner_id TEXT NOT NULL,
@@ -65,7 +53,7 @@ function createTables() {
         )
     `);
     
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS staff_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_id TEXT NOT NULL,
@@ -76,7 +64,7 @@ function createTables() {
         )
     `);
     
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS ratings (
             channel_id TEXT PRIMARY KEY,
             stars INTEGER NOT NULL,
@@ -85,25 +73,26 @@ function createTables() {
         )
     `);
 
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS staff_last_seen (
             user_id TEXT PRIMARY KEY,
             last_seen TEXT NOT NULL
         )
     `);
 
- db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS counters (
             channel_id TEXT PRIMARY KEY,
             number INTEGER DEFAULT 0,
             last_user_id TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT
+            updated_at TEXT,
+            reset_by TEXT,     
+            reset_reason TEXT   
         )
     `);
     
-    // Leaderboard table
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS counter_leaderboard (
             user_id TEXT PRIMARY KEY,
             total_count INTEGER DEFAULT 0,
@@ -114,20 +103,11 @@ function createTables() {
         )
     `);
 
-    db.run(`
-    CREATE TABLE IF NOT EXISTS counters (
-        channel_id TEXT PRIMARY KEY,
-        number INTEGER DEFAULT 0,
-        last_user_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT,
-        reset_by TEXT,     
-        reset_reason TEXT   
-    )
-`);
-}
+    // Migration: Add missing columns to counters table
+    try { db.exec(`ALTER TABLE counters ADD COLUMN reset_by TEXT`); } catch(e) {}
+    try { db.exec(`ALTER TABLE counters ADD COLUMN reset_reason TEXT`); } catch(e) {}
 
-// ===== SAVE FUNCTION =====
+}
 
 function save() {
     if (!db || !dbPath) return;
@@ -141,19 +121,38 @@ function save() {
     }
 }
 
-// ===== TICKET OPERATIONS =====
+// Helper function to execute with params
+function run(sql, params = []) {
+    if (!db) throw new Error('Database not initialized');
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    stmt.step();
+    stmt.free();
+}
+
+// Helper function to get data with params
+function get(sql, params = []) {
+    if (!db) throw new Error('Database not initialized');
+    const result = db.exec(sql, params);
+    if (!result || result.length === 0) return null;
+    const row = result[0].values[0];
+    const columns = result[0].columns;
+    const obj = {};
+    columns.forEach((col, i) => { obj[col] = row[i]; });
+    return obj;
+}
 
 function createTicket(data) {
-    const stmt = `
+    const stmt = db.prepare(`
         INSERT OR REPLACE INTO tickets (
             channel_id, owner_id, category, created_at, last_activity,
             claimed_by, closed, closed_at, rating, locked,
             lock_reason, lock_by, lock_at, message_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+    `);
     
-    db.run(stmt, [
-        String(data.channelId),      // ⭐ ALS STRING SPEICHERN! ⭐
+    stmt.bind([
+        String(data.channelId),
         String(data.ownerId),
         data.category,
         data.createdAt,
@@ -169,27 +168,22 @@ function createTicket(data) {
         data.messageId || null,
     ]);
     
+    stmt.step();
+    stmt.free();
     save();
 }
 
 function getTicket(channelId) {
-    // ⭐ SURE WE HAVE STRING! ⭐
     const channelIdStr = String(channelId);
-    
-    const stmt = `SELECT * FROM tickets WHERE channel_id = ?`;
-    const result = db.exec(stmt, [channelIdStr]);
+    const result = db.exec(`SELECT * FROM tickets WHERE channel_id = ?`, [channelIdStr]);
     
     if (!result || result.length === 0) return null;
     
     const row = result[0].values[0];
     const columns = result[0].columns;
-    
     const ticket = {};
-    columns.forEach((col, i) => {
-        ticket[col] = row[i];
-    });
+    columns.forEach((col, i) => { ticket[col] = row[i]; });
     
-    // ⭐ ENSURE channel_id IS STRING FOR CONSISTENCY ⭐
     ticket.channel_id = String(ticket.channel_id);
     ticket.owner_id = String(ticket.owner_id);
     
@@ -207,8 +201,10 @@ function updateTicket(channelId, updates) {
     
     values.push(channelId);
     
-    const stmt = `UPDATE tickets SET ${fields.join(', ')} WHERE channel_id = ?`;
-    db.run(stmt, values);
+    const stmt = db.prepare(`UPDATE tickets SET ${fields.join(', ')} WHERE channel_id = ?`);
+    stmt.bind(values);
+    stmt.step();
+    stmt.free();
     
     save();
 }
@@ -221,9 +217,7 @@ function getAllTickets() {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const ticket = {};
-        columns.forEach((col, i) => {
-            ticket[col] = row[i];
-        });
+        columns.forEach((col, i) => { ticket[col] = row[i]; });
         return ticket;
     });
 }
@@ -236,26 +230,27 @@ function getOpenTickets() {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const ticket = {};
-        columns.forEach((col, i) => {
-            ticket[col] = row[i];
-        });
+        columns.forEach((col, i) => { ticket[col] = row[i]; });
         return ticket;
     });
 }
 
 function deleteTicket(channelId) {
-    db.run('DELETE FROM tickets WHERE channel_id = ?', [channelId]);
+    const stmt = db.prepare('DELETE FROM tickets WHERE channel_id = ?');
+    stmt.bind([channelId]);
+    stmt.step();
+    stmt.free();
     save();
 }
 
-// ===== STAFF NOTES OPERATIONS =====
-
 function addNote(data) {
-    db.run(
-        `INSERT INTO staff_notes (channel_id, author_id, author_name, note, timestamp)
-         VALUES (?, ?, ?, ?, ?)`,
-        [data.channelId, data.authorId, data.authorName, data.note, data.timestamp]
-    );
+    const stmt = db.prepare(`
+        INSERT INTO staff_notes (channel_id, author_id, author_name, note, timestamp)
+         VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.bind([data.channelId, data.authorId, data.authorName, data.note, data.timestamp]);
+    stmt.step();
+    stmt.free();
     save();
 }
 
@@ -270,21 +265,19 @@ function getNotes(channelId) {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const note = {};
-        columns.forEach((col, i) => {
-            note[col] = row[i];
-        });
+        columns.forEach((col, i) => { note[col] = row[i]; });
         return note;
     });
 }
 
-// ===== RATING OPERATIONS =====
-
 function addRating(data) {
-    db.run(
-        `INSERT OR REPLACE INTO ratings (channel_id, stars, rated_at, owner_id)
-         VALUES (?, ?, ?, ?)`,
-        [data.channelId, data.stars, data.ratedAt, data.ownerId]
-    );
+    const stmt = db.prepare(`
+        INSERT OR REPLACE INTO ratings (channel_id, stars, rated_at, owner_id)
+         VALUES (?, ?, ?, ?)
+    `);
+    stmt.bind([data.channelId, data.stars, data.ratedAt, data.ownerId]);
+    stmt.step();
+    stmt.free();
     save();
 }
 
@@ -296,33 +289,26 @@ function getRating(channelId) {
     const columns = result[0].columns;
     const row = result[0].values[0];
     const rating = {};
-    columns.forEach((col, i) => {
-        rating[col] = row[i];
-    });
+    columns.forEach((col, i) => { rating[col] = row[i]; });
     
     return rating;
 }
 
-// ===== BATCH OPERATIONS =====
-
 function batchCloseTickets(channelIds) {
     const placeholders = channelIds.map(() => '?').join(',');
-    const stmt = `UPDATE tickets SET closed = 1, closed_at = datetime('now'), last_activity = datetime('now') WHERE channel_id IN (${placeholders})`;
-    
-    db.run(stmt, channelIds);
+    const stmt = db.prepare(`UPDATE tickets SET closed = 1, closed_at = datetime('now'), last_activity = datetime('now') WHERE channel_id IN (${placeholders})`);
+    stmt.bind(channelIds);
+    stmt.step();
+    stmt.free();
     save();
 }
-
-// ===== MIGRATION =====
 
 function migrateFromJSON(jsonData) {
     let count = 0;
     
     for (const [channelId, ticket] of Object.entries(jsonData.tickets || {})) {
-        // Skip if already exists
         if (getTicket(channelId)) continue;
         
-        // Insert ticket
         createTicket({
             channelId: ticket.channelId,
             ownerId: ticket.ownerId,
@@ -342,7 +328,6 @@ function migrateFromJSON(jsonData) {
         count++;
     }
     
-    // Migrate ratings
     for (const [channelId, rating] of Object.entries(jsonData.ratings || {})) {
         addRating({
             channelId,
@@ -355,16 +340,12 @@ function migrateFromJSON(jsonData) {
     return count;
 }
 
-// ===== UTILITIES =====
-
 function close() {
     if (db) {
         save();
         db = null;
     }
 }
-
-// ===== ASSIGNED TICKETS TRACKING =====
 
 function getTicketsClaimedBy(userId) {
     const userIdStr = String(userId);
@@ -378,9 +359,7 @@ function getTicketsClaimedBy(userId) {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const ticket = {};
-        columns.forEach((col, i) => {
-            ticket[col] = row[i];
-        });
+        columns.forEach((col, i) => { ticket[col] = row[i]; });
         ticket.channel_id = String(ticket.channel_id);
         ticket.owner_id = String(ticket.owner_id);
         ticket.claimed_by = ticket.claimed_by ? String(ticket.claimed_by) : null;
@@ -401,14 +380,14 @@ function getLastSeen(userId) {
 
 function setLastSeen(userId, timestamp) {
     const userIdStr = String(userId);
-    db.run(
-        `INSERT OR REPLACE INTO staff_last_seen (user_id, last_seen) VALUES (?, ?)`,
-        [userIdStr, timestamp]
+    const stmt = db.prepare(
+        `INSERT OR REPLACE INTO staff_last_seen (user_id, last_seen) VALUES (?, ?)`
     );
+    stmt.bind([userIdStr, timestamp]);
+    stmt.step();
+    stmt.free();
     save();
 }
-
-// ===== COUNTER SYSTEM =====
 
 function getCounter(channelId) {
     const channelIdStr = String(channelId);
@@ -422,22 +401,22 @@ function getCounter(channelId) {
     const columns = result[0].columns;
     const row = result[0].values[0];
     const counter = {};
-    columns.forEach((col, i) => {
-        counter[col] = row[i];
-    });
+    columns.forEach((col, i) => { counter[col] = row[i]; });
     
     return counter;
 }
 
 function initCounter(channelId, ownerId) {
     const channelIdStr = String(channelId);
-    const ownerIdStr = String(ownerId);
     
-    db.run(
+    // ⭐ last_user_id = NULL (jeder darf mit 1 anfangen!) ⭐
+    const stmt = db.prepare(
         `INSERT INTO counters (channel_id, number, last_user_id, created_at) 
-         VALUES (?, 0, ?, datetime('now'))`,
-        [channelIdStr, ownerIdStr]
+         VALUES (?, 0, NULL, datetime('now'))`
     );
+    stmt.bind([channelIdStr]);
+    stmt.step();
+    stmt.free();
     
     save();
 }
@@ -446,11 +425,13 @@ function incrementCounter(channelId, userId) {
     const channelIdStr = String(channelId);
     const userIdStr = String(userId);
     
-    db.run(
+    const stmt = db.prepare(
         `UPDATE counters SET number = number + 1, last_user_id = ?, updated_at = datetime('now') 
-         WHERE channel_id = ?`,
-        [userIdStr, channelIdStr]
+         WHERE channel_id = ?`
     );
+    stmt.bind([userIdStr, channelIdStr]);
+    stmt.step();
+    stmt.free();
     
     save();
 }
@@ -459,11 +440,13 @@ function resetCounter(channelId, adminId) {
     const channelIdStr = String(channelId);
     const adminIdStr = String(adminId);
     
-    db.run(
+    const stmt = db.prepare(
         `UPDATE counters SET number = 0, last_user_id = ?, updated_at = datetime('now') 
-         WHERE channel_id = ?`,
-        [adminIdStr, channelIdStr]
+         WHERE channel_id = ?`
     );
+    stmt.bind([adminIdStr, channelIdStr]);
+    stmt.step();
+    stmt.free();
     
     save();
 }
@@ -476,20 +459,44 @@ function getAllCounters() {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const counter = {};
-        columns.forEach((col, i) => {
-            counter[col] = row[i];
-        });
+        columns.forEach((col, i) => { counter[col] = row[i]; });
         counter.channel_id = String(counter.channel_id);
         counter.last_user_id = String(counter.last_user_id);
         return counter;
     });
 }
 
+// ===== RAW DB ACCESS WRAPPERS (for external modules) =====
+function prepare(sql) {
+    if (!db) throw new Error('Database not initialized');
+    return db.prepare(sql);
+}
 
+function exec(sql, params) {
+    if (!db) throw new Error('Database not initialized');
+    if (params && params.length > 0) {
+        return db.exec(sql, params);
+    }
+    return db.exec(sql);
+}
+
+function run(sql, params) {
+    if (!db) throw new Error('Database not initialized');
+    const stmt = db.prepare(sql);
+    if (params && params.length > 0) {
+        stmt.bind(params);
+    }
+    stmt.step();
+    stmt.free();
+}
 
 module.exports = {
     init,
     close,
+    save,         // ← NEU
+    prepare,      // ← NEU
+    exec,         // ← NEU
+    run,          // ← NEU
     
     // Tickets
     createTicket,

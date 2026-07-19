@@ -1,25 +1,23 @@
 const config = require('../config');
 const db = require('../database');
 const { EmbedBuilder } = require('discord.js');
+const { getUserCounterStats, updateLeaderboard } = require('../utils/counterHelpers');
 
 module.exports = {
     name: 'messageCreate',
     async execute(message, client, { config, db }) {
         console.log('[MESSAGE] Received:', message.author.tag, '| Channel:', message.channel.id);
         
-        // Ignore bots
         if (message.author.bot) {
             console.log('[MESSAGE] Ignoring bot message');
             return;
         }
         
-        // Ignore DMs
         if (!message.guild) {
             console.log('[MESSAGE] Ignoring DM');
             return;
         }
         
-        // Prüfen ob Counter Channel
         const category = message.channel.parent;
         const categoryName = category?.name?.toLowerCase() || '';
         
@@ -44,115 +42,99 @@ module.exports = {
             return;
         }
         
-        const expectedNumber = counter.number + 1;
         const messageContent = message.content.trim();
+        const expectedNumber = counter.number + 1;
         
         console.log('[MESSAGE] Expected:', expectedNumber, '| Got:', messageContent);
         
-        // Prüfen ob richtige Zahl
         const messageNumber = parseInt(messageContent);
         
         if (isNaN(messageNumber) || messageNumber !== expectedNumber) {
             console.log('[MESSAGE] WRONG NUMBER! RESET COMPLETE COUNTER...');
             
-            // ⭐ COUNTER RESET ZURÜCK AUF 0! ⭐
-            db.run(
+            const stmt = db.prepare(
                 `UPDATE counters SET number = 0, last_user_id = ?, updated_at = datetime('now'), reset_by = ?, reset_reason = ? 
-                 WHERE channel_id = ?`,
-                [
-                    String(message.author.id),  // Wer hat resettet
-                    'Wrong number: ' + messageNumber,  // Warum
-                    String(message.channel.id)
-                ]
+                 WHERE channel_id = ?`
             );
+            
+            stmt.bind([
+                null,                                      // ⭐ last_user_id = NULL ⭐
+                String(message.author.id),                 // → reset_by
+                'Wrong number: ' + messageNumber,          // → reset_reason
+                String(message.channel.id)                 // → channel_id
+            ]);
+            stmt.step();
+            stmt.free();
             db.save();
             
             console.log('[MESSAGE] Counter reset to 0');
             
-            // Falsche Zahl - DELETE Nachricht
+            // ⭐ USER NACHRICHT LÖSCHEN ⭐
             try {
                 await message.delete();
-                console.log('[MESSAGE] Message deleted');
+                console.log('[MESSAGE] False number message deleted');
             } catch (err) {
-                console.log('[MESSAGE] Could not delete message:', err.message);
+                console.log('[MESSAGE] Could not delete user message:', err.message);
             }
             
-            // ⭐ USER PINGEN IN WARNUNG + RESET NACHRICHT! ⭐
+            // ⭐ BOT WARNUNG IM CHAT BELASSEN ⭐
             const warningEmbed = new EmbedBuilder()
                 .setColor(0xed4245)
                 .setTitle('❌ FALSCH! COUNTER GERESETET!')
                 .setDescription(
                     `${message.author}, die richtige Zahl war **${expectedNumber}**, nicht ${messageNumber}!\n\n` +
-                    `**Counter wurde auf 1 zurückgesetzt!**\n\nNächster darf wieder mit **1** beginnen! 🔥`
+                    `**Counter wurde zurückgesetzt!**\n\nNächster darf wieder mit **1** beginnen! 🔥`
                 )
                 .setFooter({ text: `Reset durch: ${message.author.tag}` })
                 .setTimestamp();
             
-            const reply = await message.channel.send({ 
-                content: `${message.author}`,  // ⭐ PING! ⭐
-                embeds: [warningEmbed] 
-            });
-            console.log('[MESSAGE] Reset warning sent with ping');
-            
-            // Warnung nach 15 Sekunden löschen (länger wegen wichtigkeit!)
-            setTimeout(async () => {
-                try { await reply.delete(); } catch (e) {}
-            }, 15000);
+            await message.channel.send({ embeds: [warningEmbed] });
+            console.log('[MESSAGE] Reset warning sent (permanent)');
+            // ⭐ KEIN setTimeout - bleibt im Chat! ⭐
             return;
         }
         
-        // Richtige Zahl! ✓
-        const lastUserId = counter.last_user_id;
         const currentUserId = String(message.author.id);
         
-        console.log('[MESSAGE] Last User:', lastUserId, '| Current User:', currentUserId);
+        console.log('[MESSAGE] User:', currentUserId);
         
-        if (lastUserId && lastUserId === currentUserId) {
-            console.log('[MESSAGE] SAME USER AGAIN! RESET COUNTER!');
+        // ⭐ GLEICHER USER - ZWEITE ZAHL WIRD ÜBERSPRUNGEN! ⭐
+        if (counter.last_user_id && counter.last_user_id === currentUserId) {
+            console.log('[MESSAGE] SAME USER - ignoring second message');
             
-            // ⭐ AUCH HIER RESETEN! ⭐
-            db.run(
-                `UPDATE counters SET number = 0, last_user_id = ?, updated_at = datetime('now'), reset_by = ?, reset_reason = ? 
-                 WHERE channel_id = ?`,
-                [
-                    String(message.author.id),
-                    'Same user twice',
-                    String(message.channel.id)
-                ]
-            );
-            db.save();
+            try {
+                await message.delete();
+                console.log('[MESSAGE] Same user message deleted');
+            } catch (err) {
+                console.log('[MESSAGE] Could not delete message:', err.message);
+            }
             
-            console.log('[MESSAGE] Counter reset to 0 (same user)');
-            
-            // Gleicher User - DELETE Nachricht
-            try { await message.delete(); } catch (err) {}
-            
-            // ⭐ USER PINGEN! ⭐
             const warningEmbed = new EmbedBuilder()
-                .setColor(0xed4245)
-                .setTitle('🚫 DU BAST NICHT DRAN! COUNTER GERESETET!')
+                .setColor(0xfacc15)
+                .setTitle('⚠️ ACHTUNG!')
                 .setDescription(
-                    `${message.author}, du hast die letzte Zahl gesagt! Ein anderer User muss weiterzählen.\n\n` +
-                    `**Counter wurde auf 1 zurückgesetzt!**\n\nNächster darf wieder mit **1** beginnen! 🔥`
+                    `${message.author}, du hast die letzte Zahl gesagt!\n\n` +
+                    `**Deine Nachricht wurde gelöscht!** Andere müssen auch zählen dürfen. 🙏\n\n` +
+                    `Aktueller Stand: ${counter.number} → Nächste Zahl: **${counter.number + 1}**`
                 )
                 .setTimestamp();
             
             const reply = await message.channel.send({ 
-                content: `${message.author}`,  // ⭐ PING! ⭐
+                content: `${message.author}`,
                 embeds: [warningEmbed] 
             });
+            console.log('[MESSAGE] Same user warning sent');
             
             setTimeout(async () => {
                 try { await reply.delete(); } catch (e) {}
-            }, 15000);
+            }, 10000);
+            
             return;
         }
         
-        // ALLES RICHTIG! Counter erhöhen
         console.log('[MESSAGE] ✅ SUCCESS! Incrementing counter...');
         db.incrementCounter(channelId, currentUserId);
         
-        // React emoji
         try {
             await message.react('✅');
             console.log('[MESSAGE] Reacted with ✅');
@@ -160,17 +142,15 @@ module.exports = {
             console.log('[MESSAGE] Could not react:', err.message);
         }
         
-        // Leaderboard
         try {
-            const { updateLeaderboard } = require('../utils/counterHelpers');
-            const userTotal = (db.getUserCounterStats?.(currentUserId)?.total_count || 0) + 1;
+            const existingStats = getUserCounterStats(currentUserId);
+            const userTotal = (existingStats?.total_count || 0) + 1;
             updateLeaderboard(currentUserId, message.author.username, userTotal);
             console.log('[MESSAGE] Leaderboard updated');
         } catch (err) {
             console.log('[MESSAGE] Leaderboard update error:', err.message);
         }
         
-        // Milestone alle 10 Zahlen
         if (messageNumber % 10 === 0) {
             const milestoneEmbed = new EmbedBuilder()
                 .setColor(0x57f287)

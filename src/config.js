@@ -12,6 +12,11 @@ const config = {
     
     // Database
     DATABASE_PATH: process.env.DATABASE_PATH || './data/tickets.db',
+
+       COUNTER_CHANNELS: [
+        '1528483781177114766',  // Dein Generell Channel!
+        // Weitere Counter-Channels können hier hinzugefügt werden
+    ],
     
     // Business Logic
     MAX_ACTIVE_TICKETS_PER_USER: 3,

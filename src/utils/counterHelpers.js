@@ -12,9 +12,7 @@ function getUserCounterStats(userId) {
     const columns = result[0].columns;
     const row = result[0].values[0];
     const stats = {};
-    columns.forEach((col, i) => {
-        stats[col] = row[i];
-    });
+    columns.forEach((col, i) => { stats[col] = row[i]; });
     
     return stats;
 }
@@ -25,17 +23,23 @@ function updateLeaderboard(userId, username, totalCount) {
     const existing = getUserCounterStats(userId);
     
     if (existing) {
-        db.run(
+        // UPDATE
+        const stmt = db.prepare(
             `UPDATE counter_leaderboard SET total_count = ?, last_active = datetime('now')
-             WHERE user_id = ?`,
-            [totalCount, userIdStr]
+             WHERE user_id = ?`
         );
+        stmt.bind([totalCount, userIdStr]);
+        stmt.step();
+        stmt.free();
     } else {
-        db.run(
-            `INSERT INTO counter_leaderboard (user_id, username, total_count, last_active)
-             VALUES (?, ?, ?, datetime('now'))`,
-            [userIdStr, username, totalCount]
+        // INSERT
+        const stmt = db.prepare(
+            `INSERT INTO counter_leaderboard (user_id, total_count, last_active)
+             VALUES (?, ?, datetime('now'))`
         );
+        stmt.bind([userIdStr, totalCount]);
+        stmt.step();
+        stmt.free();
     }
     
     db.save();
@@ -52,9 +56,7 @@ function getTopCounters(limit = 10) {
     const columns = result[0].columns;
     return result[0].values.map(row => {
         const stats = {};
-        columns.forEach((col, i) => {
-            stats[col] = row[i];
-        });
+        columns.forEach((col, i) => { stats[col] = row[i]; });
         return stats;
     });
 }
