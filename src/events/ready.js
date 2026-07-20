@@ -123,11 +123,10 @@ module.exports = (client) => {
         }, AUTO_CLOSE_INTERVAL);
 
         client.autoCloseTimer = autoCloseTimer;
-
         console.log('✅ Auto-close scheduler started (hourly interval)');
         console.log(`🌐 Connected to guild: ${config.SERVER_ID}`);
 
-                // ⭐ GIVEAWAY SCHEDULER ⭐
+        // ⭐ GIVEAWAY SCHEDULER ⭐
         const giveawayTimer = setInterval(async () => {
             try {
                 const activeGiveaways = db.getActiveGiveaways();
@@ -157,6 +156,9 @@ module.exports = (client) => {
                             winners = shuffled.slice(0, winnerCount);
                         }
 
+                        // ⭐ Gewinner in DB speichern!
+                        db.saveGiveawayWinners(giveaway.id, winners);
+
                         db.endGiveaway(giveaway.id);
 
                         const winnerMentions = winners.length > 0
@@ -170,7 +172,7 @@ module.exports = (client) => {
                             `🎟️ **Teilnehmer:** ${entries.length}\n` +
                             `👑 **Host:** <@${giveaway.host_id}>\n\n` +
                             (winners.length > 0
-                                ? `🎊 **GEWINNER:** ${winnerMentions} 🎉`
+                                ? `🎊 **GEWINNER:** ${winnerMentions} 🎉\n\n🎁 Klicke auf "Gewinn abholen" um deinen Gewinn zu claimen!`
                                 : `😔 **Keine Gewinner** — keine Teilnehmer!`);
 
                         const embed = EmbedBuilder.from(message.embeds[0])
@@ -178,7 +180,20 @@ module.exports = (client) => {
                             .setColor(winners.length > 0 ? 0x00ff00 : 0xff0000)
                             .setFooter({ text: `Giveaway beendet • ID: ${giveaway.id}` });
 
-                        await message.edit({ embeds: [embed], components: [] });
+                        // ⭐ Claim-Button (nur wenn es Gewinner gibt)
+                        const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+                        let components = [];
+                        if (winners.length > 0) {
+                            const row = new ActionRowBuilder().addComponents(
+                                new ButtonBuilder()
+                                    .setCustomId(`giveaway_claim_${giveaway.id}`)
+                                    .setLabel('🎁 Gewinn abholen')
+                                    .setStyle(ButtonStyle.Success)
+                            );
+                            components = [row];
+                        }
+
+                        await message.edit({ embeds: [embed], components });
 
                         if (winners.length > 0) {
                             await channel.send({

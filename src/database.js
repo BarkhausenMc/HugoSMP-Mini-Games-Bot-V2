@@ -129,6 +129,30 @@ function createTables() {
         )
     `);
 
+        // Giveaway Claims
+    db.run(`
+        CREATE TABLE IF NOT EXISTS giveaway_claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            giveaway_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            minecraft_name TEXT,
+            ticket_channel_id TEXT,
+            claimed_at TEXT,
+            fulfilled INTEGER DEFAULT 0,
+            fulfilled_at TEXT,
+            UNIQUE(giveaway_id, user_id)
+        )
+    `);
+
+        db.run(`
+        CREATE TABLE IF NOT EXISTS giveaway_winners (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            giveaway_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            UNIQUE(giveaway_id, user_id)
+        )
+    `);
+
     // Migration: Add missing columns to counters table
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_by TEXT`); } catch(e) {}
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_reason TEXT`); } catch(e) {}
@@ -251,6 +275,83 @@ function getActiveGiveaways() {
         columns.forEach((col, i) => { giveaway[col] = row[i]; });
         return giveaway;
     });
+}
+
+// ===== GIVEAWAY CLAIM SYSTEM =====
+
+function getGiveawayWinners(giveawayId) {
+    // Gibt alle user_ids zurück, die beim Giveaway eingetragen waren
+    // (wird beim Beenden aufgerufen — Einträge bleiben erhalten)
+    const result = db.exec(
+        `SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return [];
+    return result[0].values.map(row => String(row[0]));
+}
+
+function hasClaimedGiveaway(giveawayId, userId) {
+    const result = db.exec(
+        `SELECT 1 FROM giveaway_claims WHERE giveaway_id = ? AND user_id = ?`,
+        [giveawayId, String(userId)]
+    );
+    return result.length > 0 && result[0].values.length > 0;
+}
+
+function createGiveawayClaim(data) {
+    db.run(
+        `INSERT OR REPLACE INTO giveaway_claims (giveaway_id, user_id, minecraft_name, ticket_channel_id, claimed_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [data.giveawayId, String(data.userId), data.minecraftName, data.ticketChannelId, data.claimedAt]
+    );
+    save();
+}
+
+function getGiveawayClaim(giveawayId, userId) {
+    const result = db.exec(
+        `SELECT * FROM giveaway_claims WHERE giveaway_id = ? AND user_id = ?`,
+        [giveawayId, String(userId)]
+    );
+    if (!result || result.length === 0 || result[0].values.length === 0) return null;
+    
+    const columns = result[0].columns;
+    const row = result[0].values[0];
+    const claim = {};
+    columns.forEach((col, i) => { claim[col] = row[i]; });
+    return claim;
+}
+
+function fulfillGiveawayClaim(claimId) {
+    db.run(
+        `UPDATE giveaway_claims SET fulfilled = 1, fulfilled_at = datetime('now') WHERE id = ?`,
+        [claimId]
+    );
+    save();
+}
+
+
+function saveGiveawayWinners(giveawayId, winnerIds) {
+    // Alte Gewinner löschen (falls re-roll)
+    db.run(`DELETE FROM giveaway_winners WHERE giveaway_id = ?`, [giveawayId]);
+    
+    for (const userId of winnerIds) {
+        db.run(
+            `INSERT OR IGNORE INTO giveaway_winners (giveaway_id, user_id) VALUES (?, ?)`,
+            [giveawayId, String(userId)]
+        );
+    }
+    save();
+}
+
+function getGiveawayWinners(giveawayId) {
+    const result = db.exec(
+        `SELECT user_id FROM giveaway_winners WHERE giveaway_id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return [];
+    return result[0].values.map(row => String(row[0]));
 }
 
 function save() {
@@ -680,4 +781,10 @@ module.exports = {
     getGiveawayEntries,
     getActiveGiveaways,
     leaveGiveaway, 
+    getGiveawayWinners,      
+    hasClaimedGiveaway,             
+    createGiveawayClaim,     
+    getGiveawayClaim,        
+    fulfillGiveawayClaim,    
+    saveGiveawayWinners,
 };

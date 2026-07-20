@@ -1,6 +1,6 @@
 // src/commands/giveaway.js
-
 const { SlashCommandBuilder } = require('discord.js');
+const config = require('../config');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -70,8 +70,14 @@ const row = new ActionRowBuilder().addComponents(
 );
 
     await interaction.reply({ embeds: [embed], components: [row] });
-
     const message = await interaction.fetchReply();
+
+        // ⭐ GIVEAWAY ROLLE PINGEN ⭐
+    if (config.GIVEAWAY_ROLE_ID) {
+        await interaction.channel.send({
+            content: `<@&${config.GIVEAWAY_ROLE_ID}> 🎉 Neues Giveaway: **${title}**! Klicke auf "Teilnehmen"!`
+        });
+    }
 
     // In DB speichern
     const db = require('../database');

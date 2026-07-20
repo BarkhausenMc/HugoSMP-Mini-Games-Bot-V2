@@ -17,7 +17,12 @@ const config = {
         '1528483781177114766',  // Dein Generell Channel!
         // Weitere Counter-Channels können hier hinzugefügt werden
     ],
-    
+
+    GIVEAWAY_TICKET_CATEGORY_ID: process.env.GIVEAWAY_TICKET_CATEGORY_ID,
+    GIVEAWAY_CLAIM_LOG_CHANNEL_ID: process.env.GIVEAWAY_CLAIM_LOG_CHANNEL_ID,
+    GIVEAWAY_ROLE_ID: process.env.GIVEAWAY_ROLE_ID || '1522966173782769835',
+    GIVEAWAY_SUPPORT_ROLE_ID: process.env.GIVEAWAY_SUPPORT_ROLE_ID || '1528655911252398160',
+
     // Business Logic
     MAX_ACTIVE_TICKETS_PER_USER: 3,
     INACTIVITY_DAYS: 7,

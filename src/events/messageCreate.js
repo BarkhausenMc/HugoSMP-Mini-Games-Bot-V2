@@ -50,6 +50,38 @@ module.exports = {
         const messageNumber = parseInt(messageContent);
         
         if (isNaN(messageNumber) || messageNumber !== expectedNumber) {
+            console.log('[MESSAGE] Invalid input!');
+            
+            // ⭐ UNTERSCHEIDEN: Ist es überhaupt eine Zahl? ⭐
+            if (isNaN(messageNumber)) {
+                console.log('[MESSAGE] Not a number - just deleting, no reset');
+                
+                try {
+                    await message.delete();
+                    console.log('[MESSAGE] Non-number message deleted');
+                } catch (err) {
+                    console.log('[MESSAGE] Could not delete message:', err.message);
+                }
+                
+                const warningEmbed = new EmbedBuilder()
+                    .setColor(0xfacc15)
+                    .setTitle('⚠️ ACHTUNG!')
+                    .setDescription(
+                        `${message.author}, im Counter schreibt man **nur Zahlen**!\n\n` +
+                        `**Deine Nachricht wurde gelöscht!** Bitte schreib die richtige Zahl: **${expectedNumber}** 🔥`
+                    )
+                    .setTimestamp();
+                
+                await message.channel.send({ 
+                    content: `${message.author}`,
+                    embeds: [warningEmbed] 
+                });
+                console.log('[MESSAGE] Non-number warning sent');
+                
+                return;  // ⭐ COUNTER BLEIBT UNVERÄNDERT! ⭐
+            }
+            
+            // ⭐ FALSCHE ZAHL (aber es war eine Zahl) - RESET! ⭐
             console.log('[MESSAGE] WRONG NUMBER! RESET COMPLETE COUNTER...');
             
             const stmt = db.prepare(
@@ -58,10 +90,10 @@ module.exports = {
             );
             
             stmt.bind([
-                null,                                      // ⭐ last_user_id = NULL ⭐
-                String(message.author.id),                 // → reset_by
-                'Wrong number: ' + messageNumber,          // → reset_reason
-                String(message.channel.id)                 // → channel_id
+                null,
+                String(message.author.id),
+                'Wrong number: ' + messageNumber,
+                String(message.channel.id)
             ]);
             stmt.step();
             stmt.free();
@@ -69,7 +101,6 @@ module.exports = {
             
             console.log('[MESSAGE] Counter reset to 0');
             
-            // ⭐ USER NACHRICHT LÖSCHEN ⭐
             try {
                 await message.delete();
                 console.log('[MESSAGE] False number message deleted');
@@ -77,7 +108,6 @@ module.exports = {
                 console.log('[MESSAGE] Could not delete user message:', err.message);
             }
             
-            // ⭐ BOT WARNUNG IM CHAT BELASSEN ⭐
             const warningEmbed = new EmbedBuilder()
                 .setColor(0xed4245)
                 .setTitle('❌ FALSCH! COUNTER GERESETET!')
@@ -90,7 +120,6 @@ module.exports = {
             
             await message.channel.send({ embeds: [warningEmbed] });
             console.log('[MESSAGE] Reset warning sent (permanent)');
-            // ⭐ KEIN setTimeout - bleibt im Chat! ⭐
             return;
         }
         
