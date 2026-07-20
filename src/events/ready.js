@@ -216,5 +216,144 @@ module.exports = (client) => {
 
         client.giveawayTimer = giveawayTimer;
         console.log('✅ Giveaway scheduler started (30s interval)');
+
+        client.giveawayTimer = giveawayTimer;
+        console.log('✅ Giveaway scheduler started (30s interval)');
+
+                // ⭐ REROLL SCHEDULER ⭐ (Alle 6 Stunden prüfen)
+        const rerollTimer = setInterval(async () => {
+            try {
+                const { EmbedBuilder } = require('discord.js');
+                const db = require('../database');
+                
+                const allGiveaways = db.exec(
+                    `SELECT * FROM giveaways WHERE ended = 1`
+                );
+                
+                if (!allGiveaways || allGiveaways.length === 0 || allGiveaways[0].values.length === 0) return;
+                
+                const columns = allGiveaways[0].columns;
+                const endedGiveaways = allGiveaways[0].values.map(row => {
+                    const giveaway = {};
+                    columns.forEach((col, i) => { giveaway[col] = row[i]; });
+                    return giveaway;
+                });
+
+                for (const giveaway of endedGiveaways) {
+                    try {
+                        // Prüfen ob Giveaway vor > 24h beendet wurde
+                        const endTime = giveaway.end_time * 1000;
+                        const now = Date.now();
+                        
+                        if (now - endTime < 24 * 60 * 60 * 1000) continue; // Noch zu früh
+                        
+                        // Alle Gewinner holen
+                        const winners = db.getGiveawayWinners(giveaway.id);
+                        const claims = db.getGiveawayClaimDetails(giveaway.id);
+                        
+                        // Prüfen wer nicht geclaimt hat
+                        const unclaimedWinners = winners.filter(winner => 
+                            !claims.some(c => String(c.user_id) === winner)
+                        );
+                        
+                        if (unclaimedWinners.length === 0) continue; // Alle geclaimt
+                        
+                        const channel = await client.channels.fetch(giveaway.channel_id).catch(() => null);
+                        if (!channel) continue;
+                        
+                        const message = await channel.messages.fetch(giveaway.message_id).catch(() => null);
+                        if (!message) continue;
+                        
+                        // ⭐ ⭐ guild hier HOLEN VOR DER NUTZUNG ⭐ ⭐
+                        const guild = client.guilds.cache.get(giveaway.guild_id);
+                        if (!guild) continue;
+                        
+                        // Neue Gewinner aus verbleibenden Teilnehmern
+                        const remainingEntries = db.getGiveawayEntries(giveaway.id);
+                        const eligibleUsers = remainingEntries.filter(
+                            user => !unclaimedWinners.includes(user)
+                        ).filter(user => {
+                            // Nicht schon ein Gewinner sein (geclaimt oder nicht)
+                            return !winners.includes(user);
+                        });
+                        
+                        if (eligibleUsers.length === 0) {
+                            console.log(`⚠️ Giveaway ${giveaway.id}: Keine weiteren Teilnehmer für Reroll!`);
+                            continue;
+                        }
+                        
+                        // Neue Gewinner ziehen
+                        const shuffled = [...eligibleUsers].sort(() => Math.random() - 0.5);
+                        const newWinners = shuffled.slice(0, unclaimedWinners.length);
+                        
+                        // Alte Gewinner als rerolled markieren
+                        for (const oldWinner of unclaimedWinners) {
+                            db.recordReroll(giveaway.id, oldWinner, null);
+                        }
+                        
+                        // Neue Gewinner speichern
+                        db.saveGiveawayWinners(giveaway.id, newWinners);
+                        
+                        // Update Embed
+                        const winnerMentions = newWinners.map(id => `<@${id}>`).join(', ');
+                        
+                        const embed = EmbedBuilder.from(message.embeds[0]);
+                        
+                        // Beschreibung Zeilen durchgehen und updaten
+                        const descLines = embed.data.description.split('\n').map(line => {
+                            if (line.startsWith('🎊 **GEWINNER:**')) {
+                                return `🎊 **NEUE GEWINNER:** ${winnerMentions}`;
+                            }
+                            if (line.startsWith('⏰ **Status:**')) {
+                                return '⏰ **Status:** ABGELAUFEN (REROLLED)';
+                            }
+                            return line;
+                        }).join('\n');
+                        
+                        embed.setDescription(descLines)
+                            .setColor(0xffa500)
+                            .setFooter({ text: `Giveaway gererollt • ID: ${giveaway.id}` });
+                        
+                        await message.edit({ embeds: [embed], components: [] });
+                        
+                        // Benachrichtigungen
+                        await channel.send({
+                            content: `🔄 **Giveaway gererollt!**\nDie vorherigen Gewinner haben sich nicht gemeldet.\n\n**Neue Gewinner:** ${winnerMentions}\n🎉 **${giveaway.title}**`
+                        });
+                        
+                        // Log
+                        if (config.GIVEAWAY_CLAIM_LOG_CHANNEL_ID) {
+                            const logChannel = guild.channels.cache.get(config.GIVEAWAY_CLAIM_LOG_CHANNEL_ID);
+                            if (logChannel) {
+                                const logEmbed = new EmbedBuilder()
+                                    .setTitle('🔄 Giveaway Reroll')
+                                    .setColor(0xffa500)
+                                    .setDescription(
+                                        `**Giveaway:** ${giveaway.title}\n` +
+                                        `**Alte Gewinner:** ${unclaimedWinners.map(id => `<@${id}>`).join(', ')}\n` +
+                                        `**Neue Gewinner:** ${newWinners.map(id => `<@${id}>`).join(', ')}\n` +
+                                        `**Zeit:** ${new Date().toLocaleString('de-DE')}`
+                                    )
+                                    .setTimestamp();
+                                
+                                await logChannel.send({ embeds: [logEmbed] });
+                            }
+                        }
+                        
+                        console.log(`✅ Reroll completed for giveaway ${giveaway.id}`);
+                        
+                    } catch (error) {
+                        console.error(`Fehler beim Reroll des Giveaways ${giveaway.id}:`, error.message);
+                    }
+                }
+            } catch (err) {
+                console.error('Reroll scheduler error:', err.message);
+            }
+        }, 6 * 60 * 60 * 1000); // Alle 6 Stunden
+        
+        
+        client.rerollTimer = rerollTimer;
+        console.log('✅ Reroll scheduler started (6h interval)');
+
     });
 };

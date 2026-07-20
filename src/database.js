@@ -153,6 +153,17 @@ function createTables() {
         )
     `);
 
+    // Giveaway Winners Reroll
+    db.run(`
+        CREATE TABLE IF NOT EXISTS giveaway_rerolls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            giveaway_id TEXT NOT NULL,
+            original_winner_id TEXT NOT NULL,
+            rerolled_at TEXT,
+            replaced_by TEXT
+        )
+    `);
+
     // Migration: Add missing columns to counters table
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_by TEXT`); } catch(e) {}
     try { db.exec(`ALTER TABLE counters ADD COLUMN reset_reason TEXT`); } catch(e) {}
@@ -735,6 +746,62 @@ function run(sql, params) {
     stmt.free();
 }
 
+// ===== GIVEAWAY REROLL SYSTEM =====
+
+function getGiveawayClaimDetails(giveawayId) {
+    // Gibt alle Gewinner + Claim-Status zurück
+    const result = db.exec(
+        `SELECT * FROM giveaway_claims WHERE giveaway_id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return [];
+    
+    const columns = result[0].columns;
+    return result[0].values.map(row => {
+        const claim = {};
+        columns.forEach((col, i) => { claim[col] = row[i]; });
+        return claim;
+    });
+}
+
+function getWinnersWithoutTickets(giveawayId) {
+    // Alle Gewinner die in der winners Tabelle sind, aber nicht in claims
+    db.run(`
+        DELETE FROM giveaway_winners 
+        WHERE giveaway_id = ? AND user_id IN (
+            SELECT user_id FROM giveaway_claims WHERE giveaway_id = ?
+        )
+    `, [giveawayId, giveawayId]);
+    
+    const result = db.exec(
+        `SELECT user_id FROM giveaway_winners WHERE giveaway_id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return [];
+    return result[0].values.map(row => String(row[0]));
+}
+
+function recordReroll(giveawayId, originalWinnerId, newWinnerId) {
+    db.run(
+        `INSERT INTO giveaway_rerolls (giveaway_id, original_winner_id, replaced_by, rerolled_at)
+         VALUES (?, ?, ?, datetime('now'))`,
+        [giveawayId, String(originalWinnerId), newWinnerId ? String(newWinnerId) : null]
+    );
+    save();
+}
+
+function getGiveawayDuration(giveawayId) {
+    const result = db.exec(
+        `SELECT created_at FROM giveaways WHERE id = ?`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return null;
+    return new Date(result[0].values[0][0]);
+}
+
 module.exports = {
     init,
     close,
@@ -787,4 +854,8 @@ module.exports = {
     getGiveawayClaim,        
     fulfillGiveawayClaim,    
     saveGiveawayWinners,
+    getGiveawayClaimDetails,    
+    getWinnersWithoutTickets,   
+    recordReroll,               
+    getGiveawayDuration,        
 };
