@@ -197,7 +197,7 @@ module.exports = (client) => {
 
                         if (winners.length > 0) {
                             await channel.send({
-                                content: `🎊 **Giveaway beendet!**\nHerzlichen Glückwunsch an ${winnerMentions}!\n🎉 **${giveaway.title}**`,
+                                content: `🎊 **Giveaway beendet!**\nHerzlichen Glückwunsch an ${winnerMentions}!\n🎉 Du kannst dein **Gewinn einlösen**, indem du auf den **Gewinn abholen** Button klickst. **${giveaway.title}**`,
                                 allowedMentions: { users: winners }
                             });
                         } else {
