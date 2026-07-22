@@ -14,7 +14,7 @@ const config = {
     DATABASE_PATH: process.env.DATABASE_PATH || './data/tickets.db',
 
        COUNTER_CHANNELS: [
-        '1528483781177114766',  // Dein Generell Channel!
+        '1529412758511030323',  // Dein Generell Channel!
         // Weitere Counter-Channels können hier hinzugefügt werden
     ],
 
