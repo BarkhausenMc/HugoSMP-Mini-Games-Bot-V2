@@ -802,6 +802,21 @@ function getGiveawayDuration(giveawayId) {
     return new Date(result[0].values[0][0]);
 }
 
+function getLastRerollTime(giveawayId) {
+    const result = db.exec(
+        `SELECT rerolled_at FROM giveaway_rerolls WHERE giveaway_id = ? ORDER BY rerolled_at DESC LIMIT 1`,
+        [giveawayId]
+    );
+    
+    if (!result || result.length === 0 || result[0].values.length === 0) return null;
+    return result[0].values[0][0];
+}
+
+function markGiveawayRerolled(giveawayId) {
+    db.run(`UPDATE giveaways SET ended = 2 WHERE id = ?`, [giveawayId]);
+    save();
+}
+
 module.exports = {
     init,
     close,
@@ -857,5 +872,7 @@ module.exports = {
     getGiveawayClaimDetails,    
     getWinnersWithoutTickets,   
     recordReroll,               
-    getGiveawayDuration,        
+    getGiveawayDuration,              
+    getLastRerollTime,       
+    markGiveawayRerolled,  
 };

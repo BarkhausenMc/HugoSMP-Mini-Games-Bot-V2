@@ -220,43 +220,54 @@ module.exports = (client) => {
         client.giveawayTimer = giveawayTimer;
         console.log('✅ Giveaway scheduler started (30s interval)');
 
-                // ⭐ REROLL SCHEDULER ⭐ (Alle 6 Stunden prüfen)
+        // ⭐ REROLL SCHEDULER ⭐ (Alle 1 Stunde prüfen)
         const rerollTimer = setInterval(async () => {
             try {
-                const { EmbedBuilder } = require('discord.js');
-                const db = require('../database');
+                const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
                 
-                const allGiveaways = db.exec(
-                    `SELECT * FROM giveaways WHERE ended = 1`
+                // Alle beendeten Giveaways (ended = 1 oder 2)
+                const allEnded = db.exec(
+                    `SELECT * FROM giveaways WHERE ended = 1 OR ended = 2`
                 );
                 
-                if (!allGiveaways || allGiveaways.length === 0 || allGiveaways[0].values.length === 0) return;
+                if (!allEnded || allEnded.length === 0 || allEnded[0].values.length === 0) return;
                 
-                const columns = allGiveaways[0].columns;
-                const endedGiveaways = allGiveaways[0].values.map(row => {
-                    const giveaway = {};
-                    columns.forEach((col, i) => { giveaway[col] = row[i]; });
-                    return giveaway;
+                const columns = allEnded[0].columns;
+                const endedGiveaways = allEnded[0].values.map(row => {
+                    const g = {};
+                    columns.forEach((col, i) => { g[col] = row[i]; });
+                    return g;
                 });
 
                 for (const giveaway of endedGiveaways) {
                     try {
-                        // Prüfen ob Giveaway vor > 24h beendet wurde
-                        const endTime = giveaway.end_time * 1000;
+                        // Referenzzeit: end_time oder letzter Reroll
+                        let referenceTime = giveaway.end_time * 1000;
+                        
+                        const lastReroll = db.getLastRerollTime(giveaway.id);
+                        if (lastReroll) {
+                            referenceTime = new Date(lastReroll).getTime();
+                        }
+                        
                         const now = Date.now();
                         
-                        if (now - endTime < 24 * 60 * 60 * 1000) continue; // Noch zu früh
+                        // ⭐ IMMER 24h PRÜFEN — egal ob erster reroll oder nicht
+                        if (now - referenceTime < 24 * 60 * 60 * 1000) continue;
                         
                         // Alle Gewinner holen
                         const winners = db.getGiveawayWinners(giveaway.id);
                         const claims = db.getGiveawayClaimDetails(giveaway.id);
                         
-                        // Prüfen wer nicht geclaimt hat
+                        // Wer hat NICHT geclaimed?
                         const unclaimedWinners = winners.filter(winner => 
                             !claims.some(c => String(c.user_id) === winner)
                         );
                         
-                        if (unclaimedWinners.length === 0) continue; // Alle geclaimt
+                        if (unclaimedWinners.length === 0) continue;
+                        
+                        // Guild holen
+                        const guild = client.guilds.cache.get(giveaway.guild_id);
+                        if (!guild) continue;
                         
                         const channel = await client.channels.fetch(giveaway.channel_id).catch(() => null);
                         if (!channel) continue;
@@ -264,21 +275,17 @@ module.exports = (client) => {
                         const message = await channel.messages.fetch(giveaway.message_id).catch(() => null);
                         if (!message) continue;
                         
-                        // ⭐ ⭐ guild hier HOLEN VOR DER NUTZUNG ⭐ ⭐
-                        const guild = client.guilds.cache.get(giveaway.guild_id);
-                        if (!guild) continue;
-                        
-                        // Neue Gewinner aus verbleibenden Teilnehmern
+                        // Verbleibende Teilnehmer (die nicht schon Gewinner sind)
                         const remainingEntries = db.getGiveawayEntries(giveaway.id);
-                        const eligibleUsers = remainingEntries.filter(
-                            user => !unclaimedWinners.includes(user)
-                        ).filter(user => {
-                            // Nicht schon ein Gewinner sein (geclaimt oder nicht)
-                            return !winners.includes(user);
-                        });
+                        const eligibleUsers = remainingEntries.filter(user => 
+                            !winners.includes(user)
+                        );
                         
                         if (eligibleUsers.length === 0) {
                             console.log(`⚠️ Giveaway ${giveaway.id}: Keine weiteren Teilnehmer für Reroll!`);
+                            // Als "fully rerolled" markieren (ended = 3)
+                            db.run(`UPDATE giveaways SET ended = 3 WHERE id = ?`, [giveaway.id]);
+                            db.save();
                             continue;
                         }
                         
@@ -286,25 +293,31 @@ module.exports = (client) => {
                         const shuffled = [...eligibleUsers].sort(() => Math.random() - 0.5);
                         const newWinners = shuffled.slice(0, unclaimedWinners.length);
                         
-                        // Alte Gewinner als rerolled markieren
+                        // Alte unclaimed Gewinner als rerolled markieren
                         for (const oldWinner of unclaimedWinners) {
                             db.recordReroll(giveaway.id, oldWinner, null);
                         }
                         
-                        // Neue Gewinner speichern
-                        db.saveGiveawayWinners(giveaway.id, newWinners);
+                        // Neue Gewinner + alte geclaimten Gewinner zusammen speichern
+                        const claimedWinners = winners.filter(winner => 
+                            claims.some(c => String(c.user_id) === winner)
+                        );
+                        const allFinalWinners = [...claimedWinners, ...newWinners];
+                        db.saveGiveawayWinners(giveaway.id, allFinalWinners);
+                        
+                        // Giveaway als rerolled markieren
+                        db.markGiveawayRerolled(giveaway.id);
                         
                         // Update Embed
-                        const winnerMentions = newWinners.map(id => `<@${id}>`).join(', ');
+                        const winnerMentions = allFinalWinners.map(id => `<@${id}>`).join(', ');
                         
                         const embed = EmbedBuilder.from(message.embeds[0]);
                         
-                        // Beschreibung Zeilen durchgehen und updaten
                         const descLines = embed.data.description.split('\n').map(line => {
-                            if (line.startsWith('🎊 **GEWINNER:**')) {
-                                return `🎊 **NEUE GEWINNER:** ${winnerMentions}`;
+                            if (line.startsWith('🎊')) {
+                                return `🎊 **GEWINNER:** ${winnerMentions}`;
                             }
-                            if (line.startsWith('⏰ **Status:**')) {
+                            if (line.startsWith('⏰')) {
                                 return '⏰ **Status:** ABGELAUFEN (REROLLED)';
                             }
                             return line;
@@ -314,11 +327,20 @@ module.exports = (client) => {
                             .setColor(0xffa500)
                             .setFooter({ text: `Giveaway gererollt • ID: ${giveaway.id}` });
                         
-                        await message.edit({ embeds: [embed], components: [] });
+                        // ⭐ CLAIM-BUTTON FÜR NEUE GEWINNER ⭐
+                        const claimRow = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`giveaway_claim_${giveaway.id}`)
+                                .setLabel('🎁 Gewinn abholen')
+                                .setStyle(ButtonStyle.Success)
+                        );
                         
-                        // Benachrichtigungen
+                        await message.edit({ embeds: [embed], components: [claimRow] });
+                        
+                        // Benachrichtigung
                         await channel.send({
-                            content: `🔄 **Giveaway gererollt!**\nDie vorherigen Gewinner haben sich nicht gemeldet.\n\n**Neue Gewinner:** ${winnerMentions}\n🎉 **${giveaway.title}**`
+                            content: `🔄 **Giveaway gererollt!**\nDie vorherigen Gewinner haben sich nicht innerhalb von 24h gemeldet.\n\n**Neue Gewinner:** ${newWinners.map(id => `<@${id}>`).join(', ')}\n🎉 **${giveaway.title}**\n\nKlicke auf **"🎁 Gewinn abholen"** um deinen Gewinn zu claimen!`,
+                            allowedMentions: { users: newWinners }
                         });
                         
                         // Log
@@ -330,7 +352,7 @@ module.exports = (client) => {
                                     .setColor(0xffa500)
                                     .setDescription(
                                         `**Giveaway:** ${giveaway.title}\n` +
-                                        `**Alte Gewinner:** ${unclaimedWinners.map(id => `<@${id}>`).join(', ')}\n` +
+                                        `**Alte Gewinner (nicht geclaimed):** ${unclaimedWinners.map(id => `<@${id}>`).join(', ')}\n` +
                                         `**Neue Gewinner:** ${newWinners.map(id => `<@${id}>`).join(', ')}\n` +
                                         `**Zeit:** ${new Date().toLocaleString('de-DE')}`
                                     )
@@ -349,11 +371,10 @@ module.exports = (client) => {
             } catch (err) {
                 console.error('Reroll scheduler error:', err.message);
             }
-        }, 6 * 60 * 60 * 1000); // Alle 6 Stunden
-        
+        }, 60 * 60 * 1000); // ⭐ Jede 1 Stunde prüfen
         
         client.rerollTimer = rerollTimer;
-        console.log('✅ Reroll scheduler started (6h interval)');
+        console.log('✅ Reroll scheduler started (1h interval, 24h wait)');
 
     });
 };
