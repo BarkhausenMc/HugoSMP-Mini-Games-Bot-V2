@@ -24,9 +24,7 @@ client.buttons = new Collection();
 client.modals = new Collection();
 client.selectMenus = new Collection();
 
-// ==========================================
-//   LOADER
-// ==========================================
+
 // ==========================================
 //   LOADER
 // ==========================================
