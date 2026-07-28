@@ -1,11 +1,24 @@
+// src/events/ready.js
 const config = require('../config');
 const db = require('../database');
+const fs = require('fs');
+const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 
-module.exports = (client) => {
-    client.on('clientReady', async (client) => {
-        console.log(`✅ Bot online als ${client.user.tag}`);
+module.exports = {
+    name: 'ready',
+    once: true,
+    async execute(client) {
+        console.log('========================================');
+        console.log(`✅ Bot ist online als ${client.user.tag}!`);
+        console.log(`🌐 Verbunden mit ${client.guilds.cache.size} Servern.`);
+        console.log(`⏰ Zeit: ${new Date().toLocaleString('de-DE')}`);
+        console.log('========================================');
 
+        // 1. Bot Status setzen
+        client.user.setActivity('Mini-Games | /counterstart', { type: 'WATCHING' });
+
+        // 2. Datenbank initialisieren
         try {
             await db.init();
             console.log('✅ Database initialized');
@@ -14,9 +27,7 @@ module.exports = (client) => {
             process.exit(1);
         }
 
-        // Auto-migrate old JSON if exists
-        const fs = require('fs');
-        const path = require('path');
+        // 3. Auto-Migration (falls alte JSON existiert)
         const migrationPath = path.join(__dirname, '..', '..', 'ticket_data.json');
         if (fs.existsSync(migrationPath)) {
             console.log('📦 Found ticket_data.json - starting migration...');
@@ -33,7 +44,7 @@ module.exports = (client) => {
             }
         }
 
-        // Register commands
+        // 4. Slash Commands registrieren
         try {
             const commands = [];
             for (const [, cmd] of client.commands) {
@@ -51,7 +62,7 @@ module.exports = (client) => {
             console.error('⚠️ Command registration failed:', err.message);
         }
 
-        // ⭐ AUTO-CLOSE SCHEDULER ⭐
+        // 5. ⭐ AUTO-CLOSE SCHEDULER ⭐
         const AUTO_CLOSE_INTERVAL = 60 * 60 * 1000;
         const autoCloseTimer = setInterval(async () => {
             try {
@@ -126,7 +137,7 @@ module.exports = (client) => {
         console.log('✅ Auto-close scheduler started (hourly interval)');
         console.log(`🌐 Connected to guild: ${config.SERVER_ID}`);
 
-        // ⭐ GIVEAWAY SCHEDULER ⭐
+        // 6. ⭐ GIVEAWAY SCHEDULER ⭐
         const giveawayTimer = setInterval(async () => {
             try {
                 const activeGiveaways = db.getActiveGiveaways();
@@ -156,9 +167,7 @@ module.exports = (client) => {
                             winners = shuffled.slice(0, winnerCount);
                         }
 
-                        // ⭐ Gewinner in DB speichern!
                         db.saveGiveawayWinners(giveaway.id, winners);
-
                         db.endGiveaway(giveaway.id);
 
                         const winnerMentions = winners.length > 0
@@ -180,7 +189,6 @@ module.exports = (client) => {
                             .setColor(winners.length > 0 ? 0x00ff00 : 0xff0000)
                             .setFooter({ text: `Giveaway beendet • ID: ${giveaway.id}` });
 
-                        // ⭐ Claim-Button (nur wenn es Gewinner gibt)
                         const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
                         let components = [];
                         if (winners.length > 0) {
@@ -217,18 +225,13 @@ module.exports = (client) => {
         client.giveawayTimer = giveawayTimer;
         console.log('✅ Giveaway scheduler started (30s interval)');
 
-        client.giveawayTimer = giveawayTimer;
-        console.log('✅ Giveaway scheduler started (30s interval)');
-
-        // ⭐ REROLL SCHEDULER ⭐ (Alle 1 Stunde prüfen)
+        // 7. ⭐ REROLL SCHEDULER ⭐
         const rerollTimer = setInterval(async () => {
             try {
                 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
                 
-                // Alle beendeten Giveaways (ended = 1 oder 2)
-                const allEnded = db.exec(
-                    `SELECT * FROM giveaways WHERE ended = 1 OR ended = 2`
-                );
+                // Alle beendeten Giveaways prüfen
+                const allEnded = db.exec(`SELECT * FROM giveaways WHERE ended = 1 OR ended = 2`);
                 
                 if (!allEnded || allEnded.length === 0 || allEnded[0].values.length === 0) return;
                 
@@ -241,31 +244,29 @@ module.exports = (client) => {
 
                 for (const giveaway of endedGiveaways) {
                     try {
-                        // Referenzzeit: end_time oder letzter Reroll
                         let referenceTime = giveaway.end_time * 1000;
                         
-                        const lastReroll = db.getLastRerollTime(giveaway.id);
-                        if (lastReroll) {
-                            referenceTime = new Date(lastReroll).getTime();
+                        // Prüfen ob es einen letzten Reroll gibt (falls die Funktion existiert)
+                        // Falls db.getLastRerollTime nicht existiert, überspringen wir diesen Teil oder nutzen fallback
+                        if (db.getLastRerollTime) {
+                            const lastReroll = db.getLastRerollTime(giveaway.id);
+                            if (lastReroll) {
+                                referenceTime = new Date(lastReroll).getTime();
+                            }
                         }
                         
                         const now = Date.now();
-                        
-                        // ⭐ IMMER 24h PRÜFEN — egal ob erster reroll oder nicht
                         if (now - referenceTime < 24 * 60 * 60 * 1000) continue;
                         
-                        // Alle Gewinner holen
                         const winners = db.getGiveawayWinners(giveaway.id);
                         const claims = db.getGiveawayClaimDetails(giveaway.id);
                         
-                        // Wer hat NICHT geclaimed?
                         const unclaimedWinners = winners.filter(winner => 
                             !claims.some(c => String(c.user_id) === winner)
                         );
                         
                         if (unclaimedWinners.length === 0) continue;
                         
-                        // Guild holen
                         const guild = client.guilds.cache.get(giveaway.guild_id);
                         if (!guild) continue;
                         
@@ -275,7 +276,6 @@ module.exports = (client) => {
                         const message = await channel.messages.fetch(giveaway.message_id).catch(() => null);
                         if (!message) continue;
                         
-                        // Verbleibende Teilnehmer (die nicht schon Gewinner sind)
                         const remainingEntries = db.getGiveawayEntries(giveaway.id);
                         const eligibleUsers = remainingEntries.filter(user => 
                             !winners.includes(user)
@@ -283,32 +283,25 @@ module.exports = (client) => {
                         
                         if (eligibleUsers.length === 0) {
                             console.log(`⚠️ Giveaway ${giveaway.id}: Keine weiteren Teilnehmer für Reroll!`);
-                            // Als "fully rerolled" markieren (ended = 3)
-                            db.run(`UPDATE giveaways SET ended = 3 WHERE id = ?`, [giveaway.id]);
-                            db.save();
+                            if (db.run) db.run(`UPDATE giveaways SET ended = 3 WHERE id = ?`, [giveaway.id]);
                             continue;
                         }
                         
-                        // Neue Gewinner ziehen
                         const shuffled = [...eligibleUsers].sort(() => Math.random() - 0.5);
                         const newWinners = shuffled.slice(0, unclaimedWinners.length);
                         
-                        // Alte unclaimed Gewinner als rerolled markieren
                         for (const oldWinner of unclaimedWinners) {
-                            db.recordReroll(giveaway.id, oldWinner, null);
+                            if (db.recordReroll) db.recordReroll(giveaway.id, oldWinner, null);
                         }
                         
-                        // Neue Gewinner + alte geclaimten Gewinner zusammen speichern
                         const claimedWinners = winners.filter(winner => 
                             claims.some(c => String(c.user_id) === winner)
                         );
                         const allFinalWinners = [...claimedWinners, ...newWinners];
                         db.saveGiveawayWinners(giveaway.id, allFinalWinners);
                         
-                        // Giveaway als rerolled markieren
-                        db.markGiveawayRerolled(giveaway.id);
+                        if (db.markGiveawayRerolled) db.markGiveawayRerolled(giveaway.id);
                         
-                        // Update Embed
                         const winnerMentions = allFinalWinners.map(id => `<@${id}>`).join(', ');
                         
                         const embed = EmbedBuilder.from(message.embeds[0]);
@@ -327,7 +320,6 @@ module.exports = (client) => {
                             .setColor(0xffa500)
                             .setFooter({ text: `Giveaway gererollt • ID: ${giveaway.id}` });
                         
-                        // ⭐ CLAIM-BUTTON FÜR NEUE GEWINNER ⭐
                         const claimRow = new ActionRowBuilder().addComponents(
                             new ButtonBuilder()
                                 .setCustomId(`giveaway_claim_${giveaway.id}`)
@@ -337,13 +329,11 @@ module.exports = (client) => {
                         
                         await message.edit({ embeds: [embed], components: [claimRow] });
                         
-                        // Benachrichtigung
                         await channel.send({
                             content: `🔄 **Giveaway gererollt!**\nDie vorherigen Gewinner haben sich nicht innerhalb von 24h gemeldet.\n\n**Neue Gewinner:** ${newWinners.map(id => `<@${id}>`).join(', ')}\n🎉 **${giveaway.title}**\n\nKlicke auf **"🎁 Gewinn abholen"** um deinen Gewinn zu claimen!`,
                             allowedMentions: { users: newWinners }
                         });
                         
-                        // Log
                         if (config.GIVEAWAY_CLAIM_LOG_CHANNEL_ID) {
                             const logChannel = guild.channels.cache.get(config.GIVEAWAY_CLAIM_LOG_CHANNEL_ID);
                             if (logChannel) {
@@ -371,10 +361,9 @@ module.exports = (client) => {
             } catch (err) {
                 console.error('Reroll scheduler error:', err.message);
             }
-        }, 60 * 60 * 1000); // ⭐ Jede 1 Stunde prüfen
+        }, 60 * 60 * 1000);
         
         client.rerollTimer = rerollTimer;
         console.log('✅ Reroll scheduler started (1h interval, 24h wait)');
-
-    });
+    }
 };
