@@ -9,6 +9,7 @@ const config = {
     LOG_CHANNEL_ID: process.env.LOG_CHANNEL_ID,
     STAFF_ROLE_ID: process.env.STAFF_ROLE_ID,
     OWNER_ROLE_ID: process.env.OWNER_ROLE_ID,
+    WELCOME_CHANNEL_ID: process.env.WELCOME_CHANNEL_ID,
     
     // Database
     DATABASE_PATH: process.env.DATABASE_PATH || './data/tickets.db',
